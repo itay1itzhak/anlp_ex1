@@ -1,9 +1,6 @@
 import argparse
 import logging
 import torch
-import torch.nn as nn
-# import torch.optim as optim
-# from torch.utils.data import DataLoader
 from transformers import AutoModelForSequenceClassification, AutoTokenizer #BertTokenizer, BertForSequenceClassification, RobertaTokenizer, RobertaForSequenceClassification, ElectraTokenizer, ElectraForSequenceClassification
 #from transformers import AdamW, get_linear_schedule_with_warmup
 from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
@@ -20,32 +17,33 @@ def load_dateset(training_samples, validation_samples, test_samples):
     dataset = datasets.load_dataset("sst2")
     
     # get training, validation and test sets
-    train_dataset = dataset['train'].select(range(training_samples))
-    val_dataset = dataset['validation'].select(range(validation_samples))
-    test_dataset = dataset['test'].select(range(test_samples))
+    if training_samples != -1:
+      train_dataset = dataset['train'].select(range(training_samples))
+    else:
+      train_dataset = dataset['train']
+    
+    if validation_samples != -1:
+      val_dataset = dataset['validation'].select(range(validation_samples))
+    else:
+      val_dataset = dataset['validation']
+
+    if test_samples != -1:
+      test_dataset = dataset['test'].select(range(test_samples))
+    else:
+      test_dataset = dataset['test']
+
     
     return {"train": train_dataset, "validation": val_dataset, "test": test_dataset}
     # Preprocess the dataset
 
 def preprocess_function(examples, tokenizer):
-    # use dynamic padding
-    #max_length = max([len(examples['sentence'][i].split()) for i in range(len(examples['sentence']))])
-    # Tokenize the texts
     result = tokenizer(examples['sentence'], truncation=True, max_length=512)
-    # Map labels from 0-4 to 0-1
-    print(f"preprocess_function:Before{examples['label']=}")
-    #result["label"] = [0 if label == -1 else 1 for label in examples["label"]]#[label for label in examples["label"]]
-    #print(f"preprocess_function:After{result['label']=}")
-    print(f"preprocess_function:{result['input_ids']=}")
-    # print(f"{len(result['input_ids'][0])=}")
-    
     return result
     
 def compute_metrics(eval_preds):
     metric = evaluate.load("accuracy")#, "mrpc")
     logits, labels = eval_preds
     predictions = np.argmax(logits, axis=-1)
-    print(f"compute_metrics:{labels=}")
     return metric.compute(predictions=predictions, references=labels)
 
 def train(model ,tokenizer, train_data, eval_data, seed,model_name):
@@ -57,19 +55,13 @@ def train(model ,tokenizer, train_data, eval_data, seed,model_name):
 
     training_args = TrainingArguments(
         output_dir='./results',          # Directory where checkpoints and logs will be saved
-        #evaluation_strategy="epoch",     # Evaluate model after each epoch
         logging_strategy="epoch",        # Log metrics after each epoch
         save_strategy="no",           # Save checkpoint after each epoch
-        #per_device_train_batch_size=16,  # Batch size for training
-        #per_device_eval_batch_size=64,   # Batch size for evaluation
-        #evaluation_strategy="epoch",     # Evaluate model after each epoch
         disable_tqdm=True,               # Disable tqdm progress bar
-        #load_best_model_at_end=True,     # Load the best model at the end of training
-        #metric_for_best_model="accuracy",# Metric to determine the best model
         seed = seed,                     # Seed for experiment reproducibility
         data_seed = seed,                # Seed for data shuffling reproducibility
-        report_to="wandb",               # Enable Weights&Biases logging
-        run_name = f"{model_name}_{seed}",    # Name of the W&B run
+        #report_to="wandb",               # Enable Weights&Biases logging
+        #run_name = f"{model_name}_{seed}",    # Name of the W&B run
     )
 
     print(f"{seed=}")
@@ -81,30 +73,10 @@ def train(model ,tokenizer, train_data, eval_data, seed,model_name):
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
-        compute_metrics=compute_metrics,#datasets.load_metric("accuracy"),
+        compute_metrics=compute_metrics,
         #group_by_length=True,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer, padding="longest", max_length=512)
     )
-
-    # Overfiting a batch
-    # for batch in trainer.get_train_dataloader():
-    #   break
-    # #batch = {k: v.to(device) for k, v in batch.items()}
-    # trainer.create_optimizer()
-    # for _ in range(20):
-    #     outputs = trainer.model(**batch)
-    #     loss = outputs.loss
-    #     loss.backward()
-    #     trainer.optimizer.step()
-    #     trainer.optimizer.zero_grad()
-    # with torch.no_grad():
-    #   outputs = trainer.model(**batch)
-    # preds = outputs.logits
-    # labels = batch["labels"]
-    #print(f"{compute_metrics((preds.cpu().numpy(), labels.cpu().numpy()))=}")
-    
-    #run = wandb.init(project='anlp1_sentiment-analysis', config=training_args, name=model)
-    #wandb.watch(model)
     
     # Fine-tune the model
     start_time = time.time()
@@ -119,19 +91,16 @@ def train(model ,tokenizer, train_data, eval_data, seed,model_name):
 def load_model(model):
     # Use the AutoModelForSequenceClassification class to load your models.
     if 'bert' in model:
-        #tokenizer_name = 'bert-base-uncased'
         model_name = 'bert-base-uncased'
     elif 'roberta' in model:
-        #tokenizer_name = 'roberta-base'
         model_name = 'roberta-base'
     elif 'electra' in model:
-        #tokenizer_name = 'google/electra-base-generator'
         model_name = 'google/electra-base-generator'
     else:
         print("Invalid model name!")
         raise ValueError
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)#.cuda()
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2).cuda()
 
     return model, tokenizer
 
@@ -139,7 +108,6 @@ def write_best_model_prediction(models_res, test_set,res_file):
     # Get the index of the model with the highest mean accuracy on the validation set
     model_accuracies = [(model_name,models_res[model_name]["mean_accuracy"]) for model_name in models_res.keys()]
     best_model_name = max(model_accuracies, key=lambda x: x[1])
-    #best_model = models_res[best_model_name[0]]["best_model"]
     best_trainer = models_res[best_model_name[0]]["best_trainer"]
     best_tokenizer = models_res[best_model_name[0]]["best_tokenizer"]
     best_train_time = models_res[best_model_name[0]]["best_train_time"]
@@ -150,15 +118,10 @@ def write_best_model_prediction(models_res, test_set,res_file):
     
     test_set_tokenized = test_set.map(lambda examples: preprocess_function(examples, best_tokenizer), batched=True)
     # run prediction on the best model one by one with no padding and generate predictions.txt    
-    #predictions = best_trainer.predict(test_set_tokenized)
-    # get the predictions
-    #predictions = predictions.predictions.argmax(-1)
     test_set_tokenized = test_set_tokenized.remove_columns("label")
-    print(f"{test_set_tokenized=}")
     predictions = best_trainer.predict(test_set_tokenized, metric_key_prefix="predict")#.predictions
     predictions_labels = np.argmax(predictions.predictions, axis=-1)
     # get the prediction run time
-    #print(f"{predictions=}")
     prediction_run_time = predictions.metrics['predict_runtime']
     # save the predictions to a file in the following format: <input sentence>###<predicted label 0 or 1>
     with open("predictions.txt", "w") as f:
@@ -195,7 +158,6 @@ def run_main(args):
 
     # The mean and std of the accuracies should be documented in the res.txt file
     models_res = {}
-    #best_model = {"model": None, "accuracy": 0, "seed": None}
     res_file = open("res.txt", "w")
 
     for model_name in all_models:
@@ -209,7 +171,6 @@ def run_main(args):
             # Run the training and evaluation
             model, trainer, train_time = train(model, tokenizer,dataset['train'],dataset['validation'],seed,model_name)
             # Evaluate the model
-            #eval = trainer.evaluate(eval_dataset=dataset['validation'].map(lambda examples: preprocess_function(examples, tokenizer), batched=True))#dataset['validation'])
             eval = trainer.evaluate(eval_dataset=dataset['train'].map(lambda examples: preprocess_function(examples, tokenizer), batched=True))
             wandb.finish()
             # Save the accuracy and the run time
